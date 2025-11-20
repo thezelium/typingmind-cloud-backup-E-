@@ -2403,10 +2403,18 @@ async function restoreFromBackup(key) {
     logToConsole("info", "Decrypting backup content...");
     const decryptedContent = await decryptData(backupContent);
     logToConsole("info", "Decrypted content type:", typeof decryptedContent);
+    
+    // FIX: Pulizia del contenuto per gestire i backup vecchi corrotti
+    // Sostituisce "undefined" (invalido in JSON) con "null"
+    const sanitizedContent = decryptedContent
+        .replace(/:\s*undefined\b/g, ": null")
+        .replace(/,\s*undefined\b/g, ", null")
+        .replace(/\[\s*undefined\b/g, "[null");
+
     let parsedContent;
     try {
       logToConsole("info", "Attempting to parse decrypted content...");
-      parsedContent = JSON.parse(decryptedContent);
+      parsedContent = JSON.parse(sanitizedContent);
       logToConsole("info", "Parsed content structure:", {
         type: typeof parsedContent,
         hasLocalStorage: !!parsedContent.localStorage,
