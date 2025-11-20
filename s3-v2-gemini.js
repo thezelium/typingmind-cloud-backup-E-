@@ -2482,24 +2482,35 @@ function importDataToStorage(data) {
       "chat-sync-metadata",
     ];
     let settingsRestored = 0;
+    let skippedNulls = 0;
+
+    // Import LocalStorage
     if (data.localStorage) {
       Object.entries(data.localStorage).forEach(([key, settingData]) => {
-        if (!preserveKeys.includes(key)) {
+        // FIX: Ignora chiavi di sistema o protette
+        if (!preserveKeys.includes(key) && key !== "setItem" && key !== "getItem" && key !== "removeItem") {
           try {
             const value =
-              typeof settingData === "object" && settingData.data !== undefined
+              typeof settingData === "object" && settingData !== null && settingData.data !== undefined
                 ? settingData.data
                 : settingData;
+            
             const source =
-              typeof settingData === "object" && settingData.source
+              typeof settingData === "object" && settingData !== null && settingData.source
                 ? settingData.source
                 : "localStorage";
-            if (source === "indexeddb") {
-              return;
+            
+            if (source === "indexeddb") return;
+
+            // FIX: Non ripristinare valori null/undefined
+            if (value === null || value === undefined || value === "undefined") {
+                skippedNulls++;
+                return;
             }
+
             localStorage.setItem(key, value);
             settingsRestored++;
-            logToConsole("info", `Restored setting to localStorage: ${key}`);
+            // logToConsole("info", `Restored setting to localStorage: ${key}`);
           } catch (error) {
             logToConsole(
               "error",
@@ -2510,6 +2521,8 @@ function importDataToStorage(data) {
         }
       });
     }
+
+    // Import IndexedDB
     if (data.indexedDB) {
       const request = indexedDB.open("keyval-store");
       request.onerror = () => reject(request.error);
@@ -2517,31 +2530,45 @@ function importDataToStorage(data) {
         const db = event.target.result;
         const transaction = db.transaction(["keyval"], "readwrite");
         const objectStore = transaction.objectStore("keyval");
+        
         transaction.oncomplete = () => {
           logToConsole("success", `Settings restore completed`, {
             totalRestored: settingsRestored,
+            skippedEmpty: skippedNulls,
             timestamp: new Date().toISOString(),
           });
           resolve();
         };
+        
         transaction.onerror = () => reject(transaction.error);
-        const deleteRequest = objectStore.clear();
-        deleteRequest.onsuccess = function () {
-          Object.entries(data.indexedDB).forEach(([key, settingData]) => {
+        
+        // FIX: Non cancelliamo tutto il DB prima (clear), ma facciamo merge/overwrite
+        // Questo preserva i dati esistenti se il backup ha buchi
+        // const deleteRequest = objectStore.clear(); 
+        
+        Object.entries(data.indexedDB).forEach(([key, settingData]) => {
             if (!preserveKeys.includes(key)) {
               try {
                 let value =
                   typeof settingData === "object" &&
+                  settingData !== null &&
                   settingData.data !== undefined
                     ? settingData.data
                     : settingData;
+                
                 const source =
-                  typeof settingData === "object" && settingData.source
+                  typeof settingData === "object" && settingData !== null && settingData.source
                     ? settingData.source
                     : "indexeddb";
-                if (source === "localStorage") {
-                  return;
+                
+                if (source === "localStorage") return;
+
+                // FIX: Controllo rigoroso per evitare di inserire null nel DB
+                if (value === null || value === undefined || value === "undefined") {
+                    skippedNulls++;
+                    return;
                 }
+
                 if (
                   typeof value === "string" &&
                   (value.startsWith("{") || value.startsWith("["))
@@ -2549,16 +2576,13 @@ function importDataToStorage(data) {
                   try {
                     value = JSON.parse(value);
                   } catch (parseError) {
-                    logToConsole(
-                      "warning",
-                      `Failed to parse ${key} as JSON, using as-is`,
-                      parseError
-                    );
+                    // Se fallisce il parse, usa la stringa originale
                   }
                 }
+                
                 objectStore.put(value, key);
                 settingsRestored++;
-                logToConsole("info", `Restored setting to IndexedDB: ${key}`);
+                // logToConsole("info", `Restored setting to IndexedDB: ${key}`);
               } catch (error) {
                 logToConsole(
                   "error",
@@ -2568,7 +2592,6 @@ function importDataToStorage(data) {
               }
             }
           });
-        };
       };
     } else {
       logToConsole("success", `Settings restore completed`, {
@@ -2578,14 +2601,6 @@ function importDataToStorage(data) {
       resolve();
     }
   });
-}
-function isAwsConfigured() {
-  return !!(
-    config.accessKey &&
-    config.secretKey &&
-    config.region &&
-    config.bucketName
-  );
 }
 function queueOperation(name, operation, dependencies = [], timeout = 30000) {
   if (config.syncMode === "disabled" && !name.startsWith("manual")) {
